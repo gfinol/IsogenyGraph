@@ -4,7 +4,7 @@ from collections import defaultdict
 from functools import partial
 
 from lithops.multiprocessing import Pool
-from lithops.storage.cloud_proxy import open
+from lithops.storage.cloud_proxy import open, os
 from sage.all_cmdline import primes
 from scipy.sparse import coo_matrix, save_npz
 
@@ -25,8 +25,8 @@ def reduce_isogeny_graph(work, nodes, F):
     cols = []
     data = []
     index = partial(search, nodes)
-    
-    for node_index, (node, neighbors) in enumerate(work):
+
+    for node_index, neighbors in enumerate(work):
         for neighbor, multiplicity in neighbors:
             neighbor = F(neighbor)
             rows += [node_index]
@@ -47,39 +47,39 @@ def parse_nodes(p, F):
 
 
 def neighbors_str(ell, node):
-    return [(str(n), m) for n,m in neighbors(ell, node)]
+    return [(str(n), m) for n, m in neighbors(ell, node)]
 
 
 def mapping(p, ell, F, batch):
     start, end = batch
     data = open(f'./graphs/{p}/{p}_nodes.txt').read().splitlines()[start: end]
     nodes = [F(line) for line in data]
-    work = [(str(node), neighbors_str(ell, node)) for node in nodes]
+    work = [neighbors_str(ell, node) for node in nodes]
 
     return work, p, ell
-    
+
 
 def reduce2dict(res):
     work_dict = defaultdict(list)
 
     for work, p, ell in res:
-        work_dict[(p, ell)] += work        
+        work_dict[(p, ell)] += work
 
     return work_dict
 
 
-def create_save_matrix(work_dict):
-    for key, work in work_dict.items():
-        p, ell = key
-        F = get_field(p)
-        nodes = parse_nodes(p, F)
-        assert len(work) == supersingular_count(p)
-        matrix = reduce_isogeny_graph(work, nodes, F)
-        save_npz(f"graphs/{p}/{p}_{ell}.npz", matrix, compressed=True)
+def create_save_matrix(key, work):
+    p, ell = key
+    F = get_field(p, open, os.path.isfile)
+    nodes = parse_nodes(p, F)
+    assert len(work) == supersingular_count(p)
+    matrix = reduce_isogeny_graph(work, nodes, F)
+    with open(f'graphs/{p}/{p}_{ell}.npz', 'wb') as f:
+        save_npz(f, matrix, compressed=True)
 
 
 def main():
-    initargs= {
+    initargs = {
         'runtime_memory': 1024,
         'runtime': 'gfinol/sagemath-lithops:2.0'
     }
@@ -97,9 +97,9 @@ def main():
                 batches = list(zip(rang[:-1], rang[1:]))
 
                 for ell in primes(2, 12):
-                    if not os.path.isfile(f"graphs/{p}/{p}_{ell}.npz"):
-                        for batch in batches:
-                            iterdata.append((p, ell, F, batch))
+                    # if not os.path.isfile(f"graphs/{p}/{p}_{ell}.npz"):
+                    for batch in batches:
+                        iterdata.append((p, ell, F, batch))
 
             if iterdata:
                 print('Runing on cloud')
@@ -109,7 +109,7 @@ def main():
                 work_dict = reduce2dict(res)
 
                 print('Saving data.')
-                create_save_matrix(work_dict)
+                pool.starmap(create_save_matrix, list(work_dict.items()))
 
 
 if __name__ == "__main__":
